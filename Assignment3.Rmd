@@ -1,0 +1,157 @@
+---
+title: "Bayesian Stats - Assignment 3"
+date: "2022"
+output: pdf_document
+bibliography: references.bib
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Models with memory
+
+The primary goal of this assignment is to model some real data that include the kind of groupings that lend themselves to multilevel models. Here for example, there are species that may share some characteristics in the way they respond to the environment (e.g, forest birds may have similar relationships with forest cover) and there are survey design conditions that may make repeated counts of birds at a given location more similar than counts at another location.
+
+```{r packages, message=FALSE, out.width=8}
+library(tidyverse)
+library(rethinking)
+library(kableExtra)
+
+birds <- read.csv("bird_data_bayes_stats.csv")
+```
+
+## Questions to explore
+
+This is a large dataset (there are `r nrow(birds)` observations in total) that lends itself to many possible questions and includes a number of interesting relationships. I will suggest two possible questions to explore, but I am also open to alternatives questions and models that feature multilevel components such as varying intercepts and/or varying effects (treatments, slopes, etc.).
+
+-   Using data on species in the Forest `bird_guild`, is the `count` of a species related to the `proportion_forest` in the surrounding landscape, and are those relationships similar among species in a group, or are they more or less independent among species? Such a question could be answered by comparing the predictions and fit of two models that estimate the relationship between forest amount and counts: the first would estimate the relationship for each species independently (no-pooling model) and the second would treat each species as a member of a group by sharing information on the effect of forest cover among species within the group (partial-pooling model). Multilevel models are especially useful when data are relatively sparse. So,it may also be interesting to explore how the estimates differ between the two models for individual species and whether those differences are related to the amount of data (i.e., the mean counts) for each species? It would be reasonable to assume that forest amount or human footprint has not changed too much over time and that annual estimates could be treated as essentially random replicated counts of each species and route (i.e., ignore the `year` column). You could also explore how the answer to this question changes depending on how many years of data are included: Are the benefits of multilevel models more apparent with fewer data? Similar kinds of questions could be asked using data for the species in the Urban `bird_guild` and the level of human activity surrounding the route (`human_footprint`)
+
+-   For one species (choose any species or experiment with a few), is the rate of change in the counts over time (e.g., a slope term in a regression model, hereafter "trend") better estimated by pooling information across routes? Asked a different way, does the trend on one route tell us something about the trend on other routes? For example one could fit three related Poisson or negative binomial regression models to the data for the forest species, Ovenbird (a warbler species that builds its nest on the forest floor, and camouflages the nest with a dome made of twigs and leaves that resembles the shape of a brick-oven):
+
+    -   no-pooling model: that estimated the effect of `year` on `count` for Ovenbird, separately for each route (no-pooling);
+
+    -   patrial-pooling (multilevel) model that estimated the effect of `year` on `count` for Ovenbird, treating each route as a member of a group, so that the model shares information on the species trend across routes.
+
+    -   complete-pooling model that estimates the effect of `year` on `count` for Ovenbird and assumes that there is only one trend that is the same across all routes. Note: for these models, you may want to treat the intercepts the same way in each model to keep that aspect of the model constant while varying the trend components. However, you can feel free to explore or choose to estimate the intercepts, either as independent route-level terms (no-pooling approach that assumes mean counts are not related among routes) or as multilevel terms that share information among routes (partial-pooling approach that assumes the mean counts are similar among routes).
+
+The question(s) you ask of these data are up to you. You're welcome to use one of the two ideas above, or a custom question/model. You'll notice that in the two examples I've given above, the causal model is not the primary focus. The goals for this exercise are to explore the multilevel aspects of the modeling: The benefits (or costs) of grouping data and parameters, sharing information among members of the groups (routes, species, etc.). These data provide a good opportunity to explore the implications of sharing information that comes with partial-pooling in a multilevel model, and the benefits of building a model that fits the structure of the data. You may want to explore different types of clusters in the same model (varying by route and by species), non-centered parameterizations, posterior predictions for groups, or comparing the fit of different models `ulam(...,log_lik = TRUE)` (FYI, my experience with bird-count data is that Pareto-k warnings are common, even with robust models, such as those that use a negative binomial distribution). Use the content of Chapter 13 as a guide, but don't write a mini-thesis. You have many other important things to do.
+
+#### Note: please use `ulam()` for all models. `quap()` will likely fail here and you should get familiar with using HMC to fit Bayesian models.
+
+## The data
+
+These data are **counts** (so distributions such as Poisson `dpois()` or negative binomial `dgampois()`) of birds observed by expert birders during surveys for the North American Breeding Bird Survey (BBS) [@hudson2017][@sauer2017]. The BBS is a standardized international survey designed to monitor changes over time in bird populations. It has been conducted annually since 1966, during the peak of the breeding season in Canada and the United States (late May through early July). On each of approximately 4000 BBS routes, an expert observer counts all birds seen and heard at 50 pre-determined, road-side locations, one morning each year. The field methods are tightly controlled to limit variation due to changes in observers, time of day, time of the year, and weather conditions. Because of the tight controls on methods and observer skill, the counts on each route are generally considered an accurate index of the relative abundance of birds through time. This dataset is a small subset of the BBS database, including observations of 27 selected species on BBS routes in Southern Ontario, conducted between 2001 and 2021. The `count` column in the dataset represents the sum of all individuals observed on each route and year, for a given species (e.g., the sum of all American Robins observed at all 50 locations that make up a BBS route).
+
+## The other columns
+
+The first 6 columns of the dataset demonstrate the basic structure. Each row includes the observed count for each BBS route, year and species, along with a `bird_guild` column that classifies each species as either a species primarily dependent on `Forest` habitat or a species that is commonly found in `Urban` habitats. These categories are, of course, over-simplifications of each species' habitat preferences and or tolerance of human activity, but they should be useful here to select or group species that may have similar relationships with the other variables in the dataset.
+
+```{r first columns, message=FALSE, out.width=8}
+kable(head(birds[,c(1:6)]),booktabs = T, digits = 3) 
+
+```
+
+These are the species included here and their guilds, as well as some simple summaries of their count data.
+
+```{r species summary, message=FALSE, out.width=8}
+
+sp_sum <- birds %>% 
+  filter(count > 0) %>% #just non-zero observations
+  group_by(english,bird_guild) %>% 
+  summarise(number_routes = length(unique(RouteName)), # number of BBS routes where observed
+            number_years = length(unique(year))) # number of years where observed
+sp_means <- birds %>% # including zero values
+  group_by(english,bird_guild) %>% 
+  summarise(mean_count = mean(count)) %>% #mean counts of each species over the dataset
+  inner_join(.,sp_sum,
+             by = c("english","bird_guild")) %>% 
+  arrange(bird_guild,mean_count)
+
+kable(sp_means,booktabs = T, digits = 3) 
+```
+
+## Assessment
+
+The marking for this assignment will be based on the following:
+
+-   Description of the question - 1
+
+-   Selecting, preparing and plotting (simple) the data - 2
+
+-   Model formulation - 5
+
+    -   priors and their rationale, error distributions, multilevel aspects, ulam and/or Stan code
+
+-   Model assessment - 4
+
+    -   posterior predictive checks, convergence,
+
+-   Model interpretation - 5
+
+    -   comparisons of model fit (remember to calculate PSIS you need `ulam(...,log_lik = TRUE)`), plotting of results to highlight the important conclusions, explaning how the results answer the original question
+
+-   General presentation (coherent, logical, clear, reproducible, and concise) - 3
+
+### Missing year
+
+You'll see also that even though these data span a 21-year period, there are only data for 20-years for each species. The BBS was cancelled during the pandemic lockdowns of spring 2020.
+
+The next 3 columns are more or less continuous variables that may be related to the observed species counts. These variables are calculated for each BBS route (so the values are repeated for every species and year those routes were surveyed), within a 1 km buffer surrounding the route.
+
+```{r predictor columns, out.width=8}
+kable(head(birds[,c(1,2,3,7:9)]),booktabs = T, digits = 3)
+
+```
+
+The column `human_footprint` represents a sum of some of the key human pressures on the environment as of 2018, and the column `change_human_footprint` shows an estimate of the change in a similar metric of human pressures between 2000 and 2015. These footprint measures are calculated following the methods in [@venter2016]. The final column is the proportion of the area surrounding each route that is considered forest according to the [2020 Landcover of Canada](https://open.canada.ca/data/en/dataset/ee1580ab-a23d-4f86-a09b-79763677eb47) produced by Natural Resources Canada.
+
+I hope you enjoy these data.
+
+### Numerical indicators for categorical variables
+
+A reminder that the categories here are all defined by character variables. But `Stan` and `ulam` will require the groups to be defined as numeric indices. Here is one way to do that that relies on the fact that **R** treats factors as a categorical variable with a set number of possible values, so that `as.integer(factor(x))` always returns a vector of 1:n where n is the number of categories in the original vector `x`.
+
+```{r example_index}
+sp_indicators <- birds %>% #creates a data frame that list each species indicator number
+  select(english,french) %>% #retaining french names for use in later plotting, but not necessary
+  distinct() %>% # selects just the unique rows so only one row per species
+  mutate(species_ind = as.integer(factor(english))) %>% #creates a 1:n numeric indicator
+  arrange(species_ind)
+
+birds <- birds %>%  # adds the new indicator numbers to the original data frame
+  left_join(.,sp_indicators,
+            by = c("english","french")) 
+
+kable(head(sp_indicators),booktabs = T)
+
+```
+
+And here's an example of how to get a numeric indicator for species that is separate within two groups of species. By using the `group_by(bird_guild)` function then a call to `mutate()`, the numeric indicators for species will be 1:14 for forest birds, and 1:14 for urban birds. This maybe a useful trick, but be warned that this 2-dimensional grouping structure may also be difficult to correctly code into the model description in `ulam()` (I haven't gotten it to work yet!)
+
+```{r example_index2}
+sp_indicators_group <- birds %>% #creates a data frame that list each species indicator number
+  select(english,french,bird_guild) %>% 
+  distinct() %>% # selects just the unique rows
+  group_by(bird_guild) %>% # separate grouping indicators for each bird_guild
+  mutate(species_ind = as.integer(factor(english))) %>% 
+  arrange(species_ind)
+
+
+```
+
+### Hints for working with "big" data and possibly complex models
+
+often when contemplating a large dataset such as this one, fitting each model can take a significant amount of time. The questions I've suggested here don't require the entire dataset. However, if you find yourself in a sitatution where you need to build a Bayesian model for a large dataset, consider some of the following tips to save time (and sanity).
+
+-   Start with a subset of the data. For example, if your model is estimating mean abundances by species, select only one or a few year's information to begin with. Similarly if your model is estimating changes through time, start with a few species or a few routes to get a working model, then apply the working model to all of the relvant data.
+
+-   Start with simple(r) models and gradually add components. If you're working towards a model with varying intercepts and slopes, start by getting a working model of just the intercepts, then add the slopes.
+
+-   Calculating PSIS (i.e., including `ulam(...,log_lik = TRUE)` when running the model) significantly increases the amount of time for the model to finish. Consider building your models with `ulam(...,log_lik = FALSE)` (the default), then add it once you're confident you've got your models finalized.
+
+-   Run the models in parallel (assuming your computer has sufficient cores), use the `ulam(…, chains=4, cores = 4)` to run chains in parallel, or try `ulam(…, chains=3, cores = 3)` if your machine has a total of 4 cores, it's best not to leave one free for the operating system, etc.
+
+Note: although this whole dataset is much larger than anything we've used in this course to date, your models will only include a subset of the data, and even a complex model fit to the entire dataset would require only 10-20 minutes to fit (at least for the collection of ulam models I've fit so far, that's my experience). So you may want to consider these tips, but you shouldn't have to worry about wasting hours of your time waiting for models to converge. If you run into any challenges or questions, please don't hesitate to message me in Slack.
+
+## References
