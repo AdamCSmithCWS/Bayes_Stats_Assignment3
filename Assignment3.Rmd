@@ -25,8 +25,8 @@ birds <- read.csv("bird_data_bayes_stats.csv")
 
 This is a large dataset (there are `r nrow(birds)` observations in total) that lends itself to many possible questions and includes a number of interesting relationships. I will suggest two possible questions to explore, but I am also open to alternatives questions and models that feature multilevel components such as varying intercepts and/or varying effects (treatments, slopes, etc.).
 
--   First example: Using data on Forest species (column `bird_guild`), is the `count` of a species related to the `proportion_forest` in the surrounding landscape, and are those relationships similar among species in a group, or are they more or less independent among species? Such a question could be answered by comparing the predictions and fit of two models that estimate the relationship between forest amount and counts: **the first** would estimate the relationship for each species independently (no-pooling model) and **the second** would treat each species as a member of a group by sharing information on the effect of forest cover among species within the group (partial-pooling model). \
-    Multilevel models are especially useful when data are relatively sparse. So, it would also be interesting to explore how the estimates differ between the two models for individual species and whether those differences are related to the amount of data (i.e., the mean counts) for each species? It would be reasonable to assume that forest amount or human footprint has not changed too much over time and that annual estimates could be treated as essentially random replicated counts of each species and route (i.e., ignore the `year` column). You could also explore how the answer to this question changes depending on how many years of data are included: Are the benefits of multilevel models more apparent with fewer data? \
+-   First example: Using data on Forest species (column `bird_guild`), is the `count` of a species related to the `proportion_forest` in the surrounding landscape, and are those relationships similar among species in a group, or are they more or less independent among species? Such a question could be answered by comparing the predictions and fit of two models that estimate the relationship between forest amount and counts: **the first** would estimate the relationship for each species independently (no-pooling model) and **the second** would treat each species as a member of a group by sharing information on the effect of forest cover among species within the group (partial-pooling model).\
+    Multilevel models are especially useful when data are relatively sparse. So, it would also be interesting to explore how the estimates differ between the two models for individual species and whether those differences are related to the amount of data (i.e., the mean counts) for each species? It would be reasonable to assume that forest amount or human footprint has not changed too much over time and that annual estimates could be treated as essentially random replicated counts of each species and route (i.e., ignore the `year` column). You could also explore how the answer to this question changes depending on how many years of data are included: Are the benefits of multilevel models more apparent with fewer data?\
     Similar kinds of questions could be asked using data for the species in the Urban `bird_guild` and the level of human activity surrounding the route (`human_footprint`)
 
 -   Second example: For one species (choose any species or experiment with a few), is the rate of change in the counts over time (e.g., a slope term in a regression model, hereafter "trend") better estimated by pooling information across routes? Asked a different way, does the trend on one route tell us something about the trend on other routes? For example one could fit three related Poisson or negative binomial regression models to the data for the forest species Ovenbird (a warbler species that builds its nest on the forest floor, and camouflages the nest with a dome made of twigs and leaves that resembles the shape of a brick-oven):
@@ -41,11 +41,33 @@ The question(s) you ask of these data are up to you. You're welcome to use one o
 
 #### Note: please use `ulam()` for all modeling. You should get familiar with using HMC to fit Bayesian models.
 
+## Assessment
+
+The marking for this assignment will be based on the following:
+
+-   Description of the question - 1
+
+-   Selecting, preparing and plotting (simple) the data - 2
+
+-   Model formulation - 5
+
+    -   priors and their rationale, error distributions, multilevel aspects, ulam and/or Stan code
+
+-   Model assessment - 4
+
+    -   posterior predictive checks, convergence,
+
+-   Model interpretation - 5
+
+    -   comparisons of model fit (remember to calculate PSIS you need `ulam(...,log_lik = TRUE)`), plotting of results to highlight the important conclusions, explaning how the results answer the original question
+
+-   General presentation (coherent, logical, clear, reproducible, and concise) - 3
+
 ## The data
 
 These data are **counts** (so distributions such as Poisson `dpois(lambda)` or negative binomial `dgampois(lambda,exp(log_scale)`) of birds observed by expert birders during surveys for the North American Breeding Bird Survey (BBS) [@hudson2017][@sauer2017]. See section 12.1.2 in *Statistical Rethinking* for an example of a negative binomial model. The BBS is a standardized international survey designed to monitor changes over time in bird populations. It has been conducted annually since 1966, during the peak of the breeding season in Canada and the United States (late May through early July). On each of approximately 4000 BBS routes, an expert observer counts all birds seen and heard at 50 pre-determined, road-side locations, one morning each year. The field methods are tightly controlled to limit variation due to changes in observers, time of day, time of the year, and weather conditions. Because of the tight controls on methods and observer skill, the counts on each route are generally considered an accurate index of the relative abundance of birds through time. This dataset is a small subset of the BBS database, including observations of 27 selected species on BBS routes in Southern Ontario, conducted between 2001 and 2021. The `count` column in the dataset represents the sum of all individuals observed on each route and year, for a given species (e.g., the sum of all American Robins observed at all 50 locations that make up a BBS route).
 
-## The other columns
+### The other columns
 
 The first 6 columns of the dataset demonstrate the basic structure. Each row includes the observed count for each BBS route, year and species, along with a `bird_guild` column that classifies each species as either a species primarily dependent on `Forest` habitat or a species that is commonly found in `Urban` habitats. These categories are, of course, over-simplifications of each species' habitat preferences and or tolerance of human activity, but they should be useful here to select or group species that may have similar relationships with the other variables in the dataset.
 
@@ -74,27 +96,7 @@ sp_means <- birds %>% # including zero values
 kable(sp_means,booktabs = T, digits = 3) 
 ```
 
-## Assessment
-
-The marking for this assignment will be based on the following:
-
--   Description of the question - 1
-
--   Selecting, preparing and plotting (simple) the data - 2
-
--   Model formulation - 5
-
-    -   priors and their rationale, error distributions, multilevel aspects, ulam and/or Stan code
-
--   Model assessment - 4
-
-    -   posterior predictive checks, convergence,
-
--   Model interpretation - 5
-
-    -   comparisons of model fit (remember to calculate PSIS you need `ulam(...,log_lik = TRUE)`), plotting of results to highlight the important conclusions, explaning how the results answer the original question
-
--   General presentation (coherent, logical, clear, reproducible, and concise) - 3
+## Other useful info and tips
 
 ### Missing year
 
