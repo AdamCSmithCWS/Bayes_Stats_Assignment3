@@ -111,7 +111,7 @@ You can also combine multiple priors to explore the combined effects on the expe
 #setting up a dataframe of forest cover values that span the available range 
 # and have a few different scalings
 forest_range <- data.frame(proportion_forest = seq(0,0.8,length.out = 100)) %>% 
-  mutate(pforest_centered = proportion_forest-0.5,
+  mutate(pforest_centered = proportion_forest-mean(proportion_forest),
          pforest_scaled = scale(proportion_forest))
 
 nn <- 100#number of samples to draw from the prior
@@ -137,32 +137,36 @@ priors_changes <- priors_changes %>%
 prior_slopes1 <- ggplot(data = priors_changes)+
   geom_line(aes(x = proportion_forest,y = expect_prop,
                 group = draw,
-                colour = slope_prior))+
+                colour = slope_prior),
+            alpha = 0.3)+
   facet_grid(rows = vars(slope_prior),
              scales = "free_y")+
-  scale_y_continuous(trans = "log10", labels = comma)+
-  labs(title = "pforest")+
-  ylab("Expected count")
+  scale_y_continuous(labels = comma)+
+  labs(title = "raw")+
+  xlab("proprtion forest")
 
 prior_slopes2 <- ggplot(data = priors_changes)+
   geom_line(aes(x = proportion_forest,y = expect_centered,
                 group = draw,
-                colour = slope_prior))+
+                colour = slope_prior),
+            alpha = 0.3)+
   facet_grid(rows = vars(slope_prior),
              scales = "free_y")+
-  scale_y_continuous(trans = "log10", labels = comma)+
+  scale_y_continuous(labels = comma)+
   labs(title = "centered")+
-  ylab("Expected count")
+  xlab("proprtion forest")
 
 prior_slopes3 <- ggplot(data = priors_changes)+
   geom_line(aes(x = proportion_forest,y = expect_scaled,
                 group = draw,
-                colour = slope_prior))+
+                colour = slope_prior),
+            alpha = 0.3)+
   facet_grid(rows = vars(slope_prior),
              scales = "free_y")+
-  scale_y_continuous(trans = "log10", labels = comma)+
+  scale_y_continuous( labels = comma)+
   labs(title = "scaled")+
-  ylab("Expected count")
+  ylab("Expected count")+
+  xlab("proprtion forest")
 
 print(prior_slopes3 + prior_slopes1 + prior_slopes2 + 
         plot_layout(guides = "collect"))
@@ -171,40 +175,10 @@ print(prior_slopes3 + prior_slopes1 + prior_slopes2 +
 ```
 
 
-So you can see that the standard normal prior `normal(0,1)` does well with the scaled predictor values `scale(proportion_forest)`, but the other priors generate ridiculous estimates of abundance using the same predictor. By contrast, for the raw proportion forest or the centered proportion forest, the 
+So you can see that the standard normal prior `normal(0,1)` does well with the scaled predictor values `scale(proportion_forest)`, but the other priors generate ridiculous estimates of abundance using the same predictor. By contrast, for the raw proportion forest or the centered proportion forest, the standard normal prior seems pretty restrictive on the rates of change. The steepest lines appear to double in abundance across the range of forest amount. For the non-scaled (centered and raw) proportion forest predictors, the `normal(0,3)` prior seems more reasonable. The `normal(0,5)` would probably be ok as well, but it does seem to suggest there's some prior probability of some pretty extreme overall changes.  
 
 
 
-
-## More formal prior predictions
-
-As we've done a few times in the course material you can also explore the priors by first building a model in Stan or `ulam()` and then sampling from the full prior predictive distribution integrating information across all parameters in the model.
-
-```{r, ulam_model, message=FALSE,warning=FALSE, cache=TRUE}
-
-
-#partial pooling varying slopes and intercept model with NB distribution
-m1<- ulam(
-  alist(
-    count ~ dgampois( lambda , phi ),
-    log(lambda) <- sp[species_ind] + b_for[species_ind]*pforest_scale,
-    sp[species_ind] ~ dnorm( 0 , 5 ), #using the wide, zero-mean normal prior from above
-    b_for[species_ind] ~ dnorm( b_for_bar , sigma_b_for ),
-    b_for_bar ~ dnorm( 0 , 5 ),
-    sigma_b_for ~ dexp(1),
-    phi ~ dexp(1)
-  ), data=birds_sub , chains=4, cores = 4,
-  cmdstan = TRUE)
-
-```
-
-
-```{r ulam_prior}
-#prior simulation
-prior_m1 <- extract.prior(m1)
-
-
-```
 
 
 
