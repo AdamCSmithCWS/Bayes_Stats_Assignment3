@@ -1,0 +1,214 @@
+---
+title: "Log link regression priors"
+author: "Adam Smith"
+date: "2022-12-22"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+
+```{r packages, message=FALSE, warning=FALSE, out.width=8}
+library(tidyverse)
+library(rethinking)
+library(kableExtra)
+library(patchwork)
+library(scales)
+
+birds <- read.csv("bird_data_bayes_stats.csv")
+```
+
+## Priors in log-link regression models
+
+When modeling counts, presence-absence or other data that are constrained to be non-negative, models often use a log-link. It is important to remember the link function when thinking about appropriate priors for parameters in the model. 
+
+
+```{r data_setup}
+
+
+sp_indicators <- birds %>% #creates a data frame that list each species indicator number
+  filter(bird_guild == "Forest") %>% 
+  select(english) %>% 
+  distinct() %>% # selects just the unique rows
+  mutate(species_ind = as.integer(factor(english))) %>% 
+  arrange(species_ind)
+
+
+# forest cover compare partial pool with no pooling ----------------------------------------------
+
+
+birds_sub <- birds %>% 
+  mutate(route_ind = as.integer(factor(RouteName)),
+         #species_ind = as.integer(factor(english)),
+         guild_ind = as.integer(factor(bird_guild)),
+         foot_scale = scale(human_footprint),
+         change_foot_scale = scale(change_human_footprint),
+         pforest_scale = (proportion_forest-0.5)) %>% 
+  inner_join(sp_indicators,
+            by = c("english")) %>% 
+  select(count,species_ind,pforest_scale) # this removes all unnecessary columns to keep ulam() happy
+
+```
+
+
+
+## Exploring priors in a simplified way
+
+If the model is relatively simple, you can explore the priors distributions by transforming the priors (which are coded on the log-scale) into the original scale to see how they relate to the data.
+
+For example, here are 4 alternate priors for the intercept terms in a regression model estimating the effect of the proportion of forest in the surrounding landscape on the abundance of forest birds. I've generated random draws from these priors, re-transformed them using the `exp()` function (`exp(log(a)) = a`), then added a rug-plot (dark lines along the x-axis) to indicate the observed means for each species.
+
+```{r priors_1, message=FALSE, warning=FALSE}
+
+obs_means <- birds_sub %>% 
+  group_by(species_ind) %>% 
+  summarise(mean = mean(count))
+
+nn <- 10000#number of samples to draw from the prior
+mean_priors = data.frame(prior = exp(c(rnorm(nn,0,1),
+                                   rnorm(nn,3,1),
+                                   rnorm(nn,0,0.5),
+                                   rnorm(nn,0,5))),
+                         intercept_prior = c(rep("Normal(0,1)",nn),
+                                             rep("Normal(3,1)",nn),
+                                             rep("Normal(0,0.5)",nn),
+                                             rep("Normal(0,5)",nn)))
+bks = seq(0,100,0.5)
+prior_obs <- ggplot(data = mean_priors)+
+  geom_freqpoly(aes(x = prior,colour = intercept_prior),breaks = bks,center = 0)+
+  geom_rug(data = obs_means, aes(x = mean),inherit.aes = FALSE,
+           size = 1,alpha = 0.5)+
+  coord_cartesian(xlim = c(0,20))+
+  xlab("Mean Counts")
+
+prior_obs_zoom <- ggplot(data = mean_priors)+
+  geom_freqpoly(aes(x = prior,colour = intercept_prior),breaks = bks,center = 0)+
+  geom_rug(data = obs_means, aes(x = mean),inherit.aes = FALSE,
+           size = 1,alpha = 0.5)+
+  coord_cartesian(ylim = c(0,200),
+                  xlim = c(0,20))+
+  xlab("Mean Counts")
+
+print(prior_obs + prior_obs_zoom + plot_layout(guides = "collect") 
+      + plot_annotation(title = "Alternate intercept priors compared to the observed mean counts by species"))
+
+
+```
+
+
+So the priors with mean = 0 seem to capture the observed means relatively well, most mean counts are pretty small (< 3-5 birds). The prior with a positive mean value (`normal(3,1)`) doesn't seem to fit the data at all. This positive prior could seem perfectly intuitive if you had forgotten about the log-link in the model (counts are always positive), but it actually has relatively little prior probability mass at the most commonly observed mean counts (< 1) and has most of its prior probability mass at values greater than the highest observed mean count. If you studied birds a lot, you might also expect to see mean counts for some very common species that were on the order of 10 or more. In that case the `normal(0,0.5)` prior seems like it might be a little too narrow.
+
+
+
+You can also combine multiple priors to explore the combined effects on the expected values.
+
+```{r priors_2, message=FALSE, warning=FALSE}
+
+#setting up a dataframe of forest cover values that span the available range 
+# and have a few different scalings
+forest_range <- data.frame(proportion_forest = seq(0,0.8,length.out = 100)) %>% 
+  mutate(pforest_centered = proportion_forest-0.5,
+         pforest_scaled = scale(proportion_forest))
+
+nn <- 100#number of samples to draw from the prior
+priors_changes = data.frame(intercept = c(rnorm(nn*3,0,1)),
+                         slope = c(rnorm(nn,0,1),
+                                   rnorm(nn,0,3),
+                                   rnorm(nn,0,5)),
+                         slope_prior = c(rep("Normal(0,1)",nn),
+                                             rep("Normal(0,3)",nn),
+                                             rep("Normal(0,5)",nn))) %>% 
+  arrange(slope_prior,slope) %>% 
+  mutate(draw = rep(1:nn,times = 3))
+
+# calculating the expected counts for each 
+priors_changes <- priors_changes %>%
+  expand_grid(.,forest_range) %>% #this replicates the prior_changes dataframe for every level of forest_range
+  mutate(expect_prop = exp(intercept + slope*proportion_forest),
+         expect_centered = exp(intercept + slope*pforest_centered),
+         expect_scaled = exp(intercept + slope*pforest_scaled)) %>% 
+  arrange(slope_prior,draw)
+
+
+prior_slopes1 <- ggplot(data = priors_changes)+
+  geom_line(aes(x = proportion_forest,y = expect_prop,
+                group = draw,
+                colour = slope_prior))+
+  facet_grid(rows = vars(slope_prior),
+             scales = "free_y")+
+  scale_y_continuous(trans = "log10", labels = comma)+
+  labs(title = "pforest")+
+  ylab("Expected count")
+
+prior_slopes2 <- ggplot(data = priors_changes)+
+  geom_line(aes(x = proportion_forest,y = expect_centered,
+                group = draw,
+                colour = slope_prior))+
+  facet_grid(rows = vars(slope_prior),
+             scales = "free_y")+
+  scale_y_continuous(trans = "log10", labels = comma)+
+  labs(title = "centered")+
+  ylab("Expected count")
+
+prior_slopes3 <- ggplot(data = priors_changes)+
+  geom_line(aes(x = proportion_forest,y = expect_scaled,
+                group = draw,
+                colour = slope_prior))+
+  facet_grid(rows = vars(slope_prior),
+             scales = "free_y")+
+  scale_y_continuous(trans = "log10", labels = comma)+
+  labs(title = "scaled")+
+  ylab("Expected count")
+
+print(prior_slopes3 + prior_slopes1 + prior_slopes2 + 
+        plot_layout(guides = "collect"))
+
+
+```
+
+
+So you can see that the standard normal prior `normal(0,1)` does well with the scaled predictor values `scale(proportion_forest)`, but the other priors generate ridiculous estimates of abundance using the same predictor. By contrast, for the raw proportion forest or the centered proportion forest, the 
+
+
+
+
+## More formal prior predictions
+
+As we've done a few times in the course material you can also explore the priors by first building a model in Stan or `ulam()` and then sampling from the full prior predictive distribution integrating information across all parameters in the model.
+
+```{r, ulam_model, message=FALSE,warning=FALSE, cache=TRUE}
+
+
+#partial pooling varying slopes and intercept model with NB distribution
+m1<- ulam(
+  alist(
+    count ~ dgampois( lambda , phi ),
+    log(lambda) <- sp[species_ind] + b_for[species_ind]*pforest_scale,
+    sp[species_ind] ~ dnorm( 0 , 5 ), #using the wide, zero-mean normal prior from above
+    b_for[species_ind] ~ dnorm( b_for_bar , sigma_b_for ),
+    b_for_bar ~ dnorm( 0 , 5 ),
+    sigma_b_for ~ dexp(1),
+    phi ~ dexp(1)
+  ), data=birds_sub , chains=4, cores = 4,
+  cmdstan = TRUE)
+
+```
+
+
+```{r ulam_prior}
+#prior simulation
+prior_m1 <- extract.prior(m1)
+
+
+```
+
+
+
+
+
+
+
