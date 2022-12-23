@@ -103,17 +103,27 @@ print(prior_obs + prior_obs_zoom + plot_layout(guides = "collect")
 So the priors with mean = 0 seem to capture the observed means relatively well, most mean counts are pretty small (< 3-5 birds). The prior with a positive mean value (`normal(3,1)`) doesn't seem to fit the data at all. This positive prior could seem perfectly intuitive if you had forgotten about the log-link in the model (counts are always positive), but it actually has relatively little prior probability mass at the most commonly observed mean counts (< 1) and has most of its prior probability mass at values greater than the highest observed mean count. If you studied birds a lot, you might also expect to see mean counts for some very common species that were on the order of 10 or more. In that case the `normal(0,0.5)` prior seems like it might be a little too narrow.
 
 
+## Combined interept and slope
 
-You can also combine multiple priors to explore the combined effects on the expected values.
 
-```{r priors_2, message=FALSE, warning=FALSE}
+You can also combine multiple priors to explore the combined effects on the expected values. As a next step, we can take what we learned above about a reasonable prior for the intercept, and combine with some possible priors for the slopes. A full exploration of the priors is possible using `ulam()` and `extract.priors()` from the `rethinking` package. However, I often find it faster to combine the priors from multiple parameters, just using the algebra from the model statement. So for example, in a basic log-link (Poisson or Negative Binomial) regression, the main line of code that defines the relationship between the response and the parameters/predictors is `log(lambda) = intercept + slope*predictor`, or the equivalent `lambda = exp(intercept + slope*predictor)`. 
+`lambda` is the mean of the Poisson distribution, so it's scaling is relatively intuitive (mean count of birds). However, it's the log of lambda that is directly linked to the parameters and the predictors, so that complicates our intuition. In addition, the `slope*predictor` component means that the scale of the prior for the parameter will depend on the scale of the predictor as well. For example, if the predictor was percent of forest, then at its maximum value we'd be multiplying the parameter by 100. Whereas if the predictor was proportion of forest, at it's maximum value we'd multiply the parameter by 1. But the number of birds hasn't changed, so the scale of the parameter will strongly depend on the scale of the predictor. 
+So there are three aspects to consider: the link-function, the scale of the prior, and the scale of the predictor. We can explore different values of the prior and the scaling of the predictor below to demonstrate. 
+
+To start we set up a dataframe of forest cover values that span the available range and have a few different scalings: the raw proportion of forest in the surrounding landscape (100 values between 0 and 0.8); then a centered version, centered on the mean (ranging from -0.4 : 0.4); and a scaled version that is mean centered and has standard deviation = 1 `scale()`. For the first two a one-unit change represents more than the entire range of values, while for the scaled version a one-unit change represents one standard deviation. 
+
+```{r priors_2a, message=FALSE, warning=FALSE}
 
 #setting up a dataframe of forest cover values that span the available range 
 # and have a few different scalings
 forest_range <- data.frame(proportion_forest = seq(0,0.8,length.out = 100)) %>% 
   mutate(pforest_centered = proportion_forest-mean(proportion_forest),
          pforest_scaled = scale(proportion_forest))
+```
 
+The we'll draw 100 samples from each of three different priors for the slope parameters and pair them with random draws of the standard normal prior for the intercept. The three priors for the slope will be all be zero-mean normal distributions with different standard deviations: 1, 3, and 5. So the distributions will have the same shape and mean, but vary in their spread: larger values of SD allow greater variation in the range of slopes. 
+
+```{r priors_2b, message=FALSE, warning=FALSE}
 nn <- 100#number of samples to draw from the prior
 priors_changes = data.frame(intercept = c(rnorm(nn*3,0,1)),
                          slope = c(rnorm(nn,0,1),
@@ -123,19 +133,30 @@ priors_changes = data.frame(intercept = c(rnorm(nn*3,0,1)),
                                              rep("Normal(0,3)",nn),
                                              rep("Normal(0,5)",nn))) %>% 
   arrange(slope_prior,slope) %>% 
-  mutate(draw = rep(1:nn,times = 3))
+  mutate(draw = rep(1:nn,times = 3)) # adding a unique integer to track the samples 
 
+```
+
+
+Then we merge the priors with the values of forest cover, expanding the priors dataframe for every level of forest cover using `expand_grid()`. 
+Finally, to calculate the expected values of lambda, we use the `exp(intercept+slope*proportion_forest)` algebra from the model description.
+
+```{r, priors_2c, message=FALSE, warning=FALSE}
 # calculating the expected counts for each 
 priors_changes <- priors_changes %>%
   expand_grid(.,forest_range) %>% #this replicates the prior_changes dataframe for every level of forest_range
-  mutate(expect_prop = exp(intercept + slope*proportion_forest),
-         expect_centered = exp(intercept + slope*pforest_centered),
-         expect_scaled = exp(intercept + slope*pforest_scaled)) %>% 
+  mutate(lambda_prop = exp(intercept + slope*proportion_forest),
+        lambda_centered = exp(intercept + slope*pforest_centered),
+         lambda_scaled = exp(intercept + slope*pforest_scaled)) %>% 
   arrange(slope_prior,draw)
 
+```
+
+Then we plot the nine groups of expected values of lambda by the combinations of three priors and three predictors. The plots are scaled to reflect the expected counts on the y-axis and the proportion forest on the x-axis. All of the x-axes are scaled the same to facilitate the comparison, but each column of the plots is labeled to indicate the scaling of the predictor variable.
+```{r plot_priors}
 
 prior_slopes1 <- ggplot(data = priors_changes)+
-  geom_line(aes(x = proportion_forest,y = expect_prop,
+  geom_line(aes(x = proportion_forest,y = lambda_prop,
                 group = draw,
                 colour = slope_prior),
             alpha = 0.3)+
@@ -143,10 +164,11 @@ prior_slopes1 <- ggplot(data = priors_changes)+
              scales = "free_y")+
   scale_y_continuous(labels = comma)+
   labs(title = "raw")+
+  ylab("")+
   xlab("proprtion forest")
 
 prior_slopes2 <- ggplot(data = priors_changes)+
-  geom_line(aes(x = proportion_forest,y = expect_centered,
+  geom_line(aes(x = proportion_forest,y = lambda_centered,
                 group = draw,
                 colour = slope_prior),
             alpha = 0.3)+
@@ -154,10 +176,11 @@ prior_slopes2 <- ggplot(data = priors_changes)+
              scales = "free_y")+
   scale_y_continuous(labels = comma)+
   labs(title = "centered")+
+  ylab("")+
   xlab("proprtion forest")
 
 prior_slopes3 <- ggplot(data = priors_changes)+
-  geom_line(aes(x = proportion_forest,y = expect_scaled,
+  geom_line(aes(x = proportion_forest,y = lambda_scaled,
                 group = draw,
                 colour = slope_prior),
             alpha = 0.3)+
@@ -169,13 +192,14 @@ prior_slopes3 <- ggplot(data = priors_changes)+
   xlab("proprtion forest")
 
 print(prior_slopes3 + prior_slopes1 + prior_slopes2 + 
-        plot_layout(guides = "collect"))
+        plot_layout(guides = "collect") &
+        theme(legend.position = "bottom"))
 
 
 ```
 
 
-So you can see that the standard normal prior `normal(0,1)` does well with the scaled predictor values `scale(proportion_forest)`, but the other priors generate ridiculous estimates of abundance using the same predictor. By contrast, for the raw proportion forest or the centered proportion forest, the standard normal prior seems pretty restrictive on the rates of change. The steepest lines appear to double in abundance across the range of forest amount. For the non-scaled (centered and raw) proportion forest predictors, the `normal(0,3)` prior seems more reasonable. The `normal(0,5)` would probably be ok as well, but it does seem to suggest there's some prior probability of some pretty extreme overall changes.  
+The standard normal prior `normal(0,1)` does well with the scaled predictor values `scale(proportion_forest)`, but the other priors generate ridiculous estimates of abundance using the same predictor. By contrast, for the raw proportion forest or the centered proportion forest, the standard normal prior seems pretty restrictive on the rates of change. The steepest lines appear to double in abundance across the range of forest amount. For the non-scaled (centered and raw) proportion forest predictors, the `normal(0,3)` prior seems more reasonable. The `normal(0,5)` would probably be ok as well, but it does seem to suggest there's some prior probability of some pretty extreme overall changes.  
 
 
 
