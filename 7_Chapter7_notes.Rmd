@@ -1,0 +1,533 @@
+---
+title: "Chapter 7 Applied CV, loo, WAIC"
+date: "2024-10-28"
+output: pdf_document
+---
+
+# Chapter 7
+
+Examples of CV, PSIS-loo, and WAIC, using [brms](https://paulbuerkner.com/brms/), a go-to R package for fitting a wide range of Bayesian models using Stan, using the "familiar" formula syntax in many R-packages.
+
+What follows is a selection of content from the Chapter 7 section of Solomon Kurtz's [rethinking with brms and tidyverse tutorials](https://bookdown.org/content/4857/ulysses-compass.html). I've added a few bits (e.g., example of how to fit a quadratic approximation in brms)
+
+We can walk through some of this during class, if useful.
+
+**NOTE** I've had some strange conlicts between brms (or maybe it's the dependency rstan) and rethinking (some conflict with the definitions of the stanfit class that differ between the packages). To get around this, I've had to uninstall rethinking and install the *slim* version of the package. How cool is it that the package has a *slim* version that allows for this!
+
+```{r, message=FALSE,warning=FALSE}
+library(tidyverse)
+library(tidybayes)
+library(rstan)
+## installing the slim version of rethinking
+## there's a possible conflict between the "stanfit" class in rethinking and in rstan
+#devtools::install_github("rmcelreath/rethinking@slim")
+library(rethinking)
+library(brms)
+library(rcartocolor)
+options("brms.backend" = "cmdstanr")
+options("brms.file_refit" = "on_change") # only refits models if the data or model differ from previous fits
+
+```
+
+To start I'll run some models from chapter 6.
+
+Here's a section from Chapter 6 in Solomon Kurtz's brms version of rethinking.
+
+## Post-treatment bias - plants, treatments and fungus
+
+Simulate the plants and fungus data
+
+```{r}
+# how many plants would you like?
+n <- 100
+
+set.seed(71)
+d <- 
+  tibble(h0        = rnorm(n, mean = 10, sd = 2), 
+         treatment = rep(0:1, each = n / 2),
+         fungus    = rbinom(n, size = 1, prob = .5 - treatment * 0.4),
+         h1        = h0 + rnorm(n, mean = 5 - 3 * fungus, sd = 1))
+```
+
+### Model b6.6
+
+\begin{align*}
+h_{1i} & \sim \operatorname{Normal}(\mu_i, \sigma) \\
+\mu_i  & = h_{0i} \times p \\
+p      & \sim \operatorname{Log-Normal}(0, 0.25) \\
+\sigma & \sim \operatorname{Exponential}(1).
+\end{align*}
+
+## brms model description
+
+brms models are defined similarly to other R packages, with the **formula** syntax.
+
+```{r b6.6, message=FALSE,warning=FALSE}
+b6.6 <- 
+  brm(data = d, 
+      family = gaussian,
+      h1 ~ 0 + h0, # model formula
+      prior = c(prior(lognormal(0, 0.25), class = b, lb = 0),
+                prior(exponential(1), class = sigma)),
+      iter = 2000, warmup = 1000, chains = 4, cores = 4,
+      seed = 6,
+      file = "fits/b06.06",
+      refresh = 1000)
+
+```
+
+The model formula syntax is generally familiar, but also note the `prior` argument. This argmument allows you control of the priors in the model `?brms::set_prior`. Syntax for setting priors is complicated (brms can fit a wide range of model types), but the package documentation is great and there is an active community of users that are open and constructive [Stan Forums](https://discourse.mc-stan.org/c/interfaces/brms/36)
+
+brms model summaries also look familiar (Regression coefficients, sigma, estimates, standard errors, and 90% credible limits). And with a few extra bits of information, including the convergence diagnostics (rhat, Bulk_ess, Tail_ess), which we can return to after the sections on MCMC.
+
+```{r}
+print(b6.6)
+```
+
+brms models also allow you to export and explore the raw Stan code `brms::stancode(b6.6)`, however the syntax of brms models is quite different than most human-written Stan models, so not a great place to try to understand Stan.
+
+So then, the expectation is an increase of about `r round((fixef(b6.6)[1] - 1) * 100, 0)` percent relative to $h_0$. But this isn't the best model. We're leaving important predictors on the table. 
+
+
+### Model b6.7: predicting with fungus and treatment
+
+```{r b6.7}
+b6.7 <- 
+  brm(data = d, 
+      family = gaussian,
+      bf(h1 ~ h0 * (a + t * treatment + f * fungus),
+         a + t + f ~ 1,
+         nl = TRUE),
+      prior = c(prior(lognormal(0, 0.2), nlpar = a, lb = 0),
+                prior(normal(0, 0.5), nlpar = t),
+                prior(normal(0, 0.5), nlpar = f),
+                prior(exponential(1), class = sigma)),
+      iter = 2000, warmup = 1000, chains = 4, cores = 4,
+      seed = 6,
+      file = "fits/b06.07",
+      refresh = 1000)
+```
+
+Summary
+
+```{r}
+print(b6.7)
+```
+
+### Model b6.8 predicting with just treatment
+
+This is the correct causal model.
+
+\begin{align*}
+h_{1i}  & \sim \operatorname{Normal}(\mu_i, \sigma) \\
+\mu_i   & = h_{0i} \times (\alpha + \beta_1 \text{treatment}_i) \\
+\alpha  & \sim \operatorname{Log-Normal}(0, 0.25) \\
+\beta_1 & \sim \operatorname{Normal}(0, 0.5) \\
+\sigma  & \sim \operatorname{Exponential}(1).
+\end{align*}
+
+```{r b6.8}
+b6.8 <- 
+  brm(data = d, 
+      family = gaussian,
+      bf(h1 ~ h0 * (a + t * treatment),
+         a + t ~ 1,
+         nl = TRUE),
+      prior = c(prior(lognormal(0, 0.2), nlpar = a, lb = 0),
+                prior(normal(0, 0.5), nlpar = t),
+                prior(exponential(1), class = sigma)),
+      iter = 2000, warmup = 1000, chains = 4, cores = 4,
+      seed = 6,
+      file = "fits/b06.08",
+      refresh = 1000)
+```
+
+Summary
+
+```{r}
+print(b6.8)
+```
+
+## Model comparison
+
+In the sections to follow, we'll practice the model comparison approach, as opposed to the widely-used model selection approach.
+
+### Model mis-selection.
+
+> We must keep in mind the lessons of the previous chapters: Inferring cause and making predictions are different tasks. Cross-validation and WAIC aim to find models that make good predictions. They don't solve any causal inference problem. If you select a model based only on expected predictive accuracy, you could easily be confounded. The reason is that backdoor paths do give us valid information about statistical associations in the data. So they can improve prediction, as long as we don't intervene in the system and the future is like the past. But recall that our working definition of knowing a cause is that we can predict the consequences of an intervention. So a good PSIS or WAIC score does not in general indicate a good causal model. (p. 226)
+
+The `file` argument in the `brm()` function saves the fitted model object as external `.rds` files so that they can be retrieved without refitting using `readRDS()`.
+
+```{r}
+b6.6 <- readRDS("fits/b06.06.rds")
+b6.7 <- readRDS("fits/b06.07.rds")
+b6.8 <- readRDS("fits/b06.08.rds")
+```
+
+With our **brms** paradigm, we also use the `waic()` function. Both the **rethinking** and **brms** packages get their functionality for the `waic()` and related functions from the [**loo** package](https://CRAN.R-project.org/package=loo) [@R-loo; @vehtariPracticalBayesianModel2017; @yaoUsingStackingAverage2018]. Since the `brms::brm()` function fits the models with HMC, we don't need to set a seed before calling `waic()` the way McElreath did with his `rethinking::quap()` model. We're already drawing from the posterior.
+
+```{r}
+waic(b6.7)
+```
+
+The WAIC estimate and its standard error are on the bottom row. The $p_\text{WAIC}$--what McElreath's output called the `penalty`--and its SE are stacked atop that. And look there on the top row. Remember how we pointed out, above, that we get the WAIC by multiplying `(lppd - pwaic)` by -2? Well, if you just do the subtraction without multiplying the result by -2, you get the `elpd_waic`. File that away. It'll become important in a bit. In McElreath's output, that was called the `lppd`.
+
+Following the version 2.8.0 update to brms, part of the suggested workflow for using information criteria with **brms** (i.e., execute `?loo.brmsfit`) is to add the estimates to the `brm()` fit object itself. You do that with the `add_criterion()` function. Here's how we'd do so with `b6.7`.
+
+```{r}
+b6.7 <- add_criterion(b6.7, criterion = "waic") 
+```
+
+With that in place, here's how you'd extract the WAIC information from the fit object.
+
+```{r}
+b6.7$criteria$waic
+```
+
+*Why would I go through all that trouble?*, you might ask. Well, two reasons. First, now your WAIC information is saved with all the rest of your fit output, which can be convenient. But second, it sets you up to use the `loo_compare()` function to compare models by their informati on criteria. To get a sense of that workflow, here we use `add_criterion()` for the next three models. Then we'll use `loo_compare()`.
+
+**NOTE** the `elpd_waic` criterion. This stands for *expected* log predictive density (it's still log pointwise predictive density but I guess the acronym got too long). WAIC relies on estimates of the expected log predictive density. You can access the pointwise estimates.
+
+```{r, warning=FALSE,message=FALSE}
+head(b6.7$criteria$waic$pointwise)
+```
+
+
+```{r w_b6.12_through_b6.14, message = F}
+# compute and save the WAIC information for the next three models
+b6.6 <- add_criterion(b6.6, criterion = "waic")
+b6.8 <- add_criterion(b6.8, criterion = "waic")
+
+# compare the WAIC estimates
+w <- loo_compare(b6.6, b6.7, b6.8, criterion = "waic")
+
+print(w)
+print(w, simplify = F)
+```
+
+You don't have to save those results as an object like we just did with `w`. But that'll serve some pedagogical purposes in just a bit. With respect to the output, notice the `elpd_diff` column and the adjacent `se_diff` column. Those are our WAIC differences in the elpd metric. The models have been rank ordered from the highest (i.e., `b6.7`) to the highest (i.e., `b6.6`). The scores listed are the differences of `b6.7` minus the comparison model. Since `b6.7` is the comparison model in the top row, the values are naturally 0 (i.e., $x - x = 0$). But now here's another critical thing to understand: Since the **brms** version 2.8.0 update, WAIC and LOO differences are no longer reported in the $-2 \times x$ metric. Remember how multiplying `(lppd - pwaic)` by -2 is a historic artifact associated with the frequentist $\chi^2$ test? We'll, the makers of the **loo** package aren't fans and they no longer support the conversion.
+
+So here's the deal. The substantive interpretations of the differences presented in an `elpd_diff` metric will be the same as if presented in a WAIC metric. But if we want to compare our `elpd_diff` results to those in the text, we will have to multiply them by -2. And also, if we want the associated standard error in the same metric, we'll need to multiply the `se_diff` column by 2. You wouldn't multiply by -2 because that would return a negative standard error, which would be silly. Here's a quick way to do those conversions.
+
+```{r}
+cbind(waic_diff = w[, 1] * -2,
+      se        = w[, 2] * 2)
+```
+
+Now those match up reasonably well with the values in McElreath's `dWAIC` and `dSE` columns.
+
+One more thing. On page 227, and on many other pages to follow in the text, McElreath used the `rethinking::compare()` function to return a rich table of information about the WAIC information for several models. If we're tricky, we can do something similar with `loo_compare`. To learn how, let's peer further into the structure of our `w` object.
+
+```{r}
+str(w)
+```
+
+When we used `print(w)`, a few code blocks earlier, it only returned two columns. It appears we actually have eight. We can see the full output with the `simplify = F` argument.
+
+```{r}
+print(w, simplify = F)
+```
+
+The results are quite analogous to those from `rethinking::compare()`. Again, the difference estimates are in the metric of the $\text{elpd}$. But the interpretation is the same and we can convert them to the traditional information criteria metric with simple multiplication. As we'll see later, this basic workflow also applies to the PSIS-LOO.
+
+Okay, we've deviated a bit from the text. Let's reign things back in and note that right after McElreath's **R** code 7.26, he wrote: "PSIS will give you almost identical values. You can add `func=PSIS` to the `compare` call to check" (p. 227). Our `brms::loo_compare()` function has a similar argument, but it's called `criterion`. We set it to `criterion = "waic"` to compare the models by the WAIC. What McElreath is calling `func=PSIS`, we'd call `criterion = "loo"`. Either way, we're asking the software the compare the models using leave-one-out cross-validation with Pareto-smoothed importance sampling.
+
+```{r}
+b6.6 <- add_criterion(b6.6, criterion = "loo")
+b6.7 <- add_criterion(b6.7, criterion = "loo")
+b6.8 <- add_criterion(b6.8, criterion = "loo")
+
+# compare the WAIC estimates
+loo_compare(b6.6, b6.7, b6.8, criterion = "loo") %>% 
+  print(simplify = F)
+```
+
+Yep, the LOO values are very similar to those from the WAIC. Anyway, at the bottom of page 227, McElreath showed how to compute the standard error of the WAIC difference for models `m6.7` and `m6.8`. Here's the procedure for us.
+
+## Outliers and diagnostics for WAIC and PSIS-loo
+
+Time to bring back the `WaffleDivorce` data.
+
+```{r}
+data(WaffleDivorce, package = "rethinking")
+
+d <-
+  WaffleDivorce %>% 
+  mutate(d = rethinking::standardize(Divorce),
+         m = rethinking::standardize(Marriage),
+         a = rethinking::standardize(MedianAgeMarriage))
+
+rm(WaffleDivorce)
+```
+
+Refit the divorce models from Section 5.1.
+
+```{r b5.1_b5.3}
+b5.1 <- 
+  brm(data = d, 
+      family = gaussian,
+      d ~ 1 + a,
+      prior = c(prior(normal(0, 0.2), class = Intercept),
+                prior(normal(0, 0.5), class = b),
+                prior(exponential(1), class = sigma)),
+      iter = 2000, warmup = 1000, chains = 4, cores = 4,
+      seed = 5,
+      sample_prior = T,
+      file = "fits/b05.01",
+      refresh = 1000)
+
+b5.2 <- 
+  brm(data = d, 
+      family = gaussian,
+      d ~ 1 + m,
+      prior = c(prior(normal(0, 0.2), class = Intercept),
+                prior(normal(0, 0.5), class = b),
+                prior(exponential(1), class = sigma)),
+      iter = 2000, warmup = 1000, chains = 4, cores = 4,
+      seed = 5,
+      file = "fits/b05.02",
+      refresh = 1000)
+
+b5.3 <- 
+  brm(data = d, 
+      family = gaussian,
+      d ~ 1 + m + a,
+      prior = c(prior(normal(0, 0.2), class = Intercept),
+                prior(normal(0, 0.5), class = b),
+                prior(exponential(1), class = sigma)),
+      iter = 2000, warmup = 1000, chains = 4, cores = 4,
+      seed = 5,
+      file = "fits/b05.03",
+      refresh = 1000)
+```
+
+Compute and save the LOO estimates for each.
+
+```{r}
+b5.1 <- add_criterion(b5.1, criterion = "loo")
+b5.2 <- add_criterion(b5.2, criterion = "loo")
+b5.3 <- add_criterion(b5.3, criterion = "loo")
+```
+
+Now compare the models by the PSIS-LOO-CV.
+
+```{r}
+loo_compare(b5.1, b5.2, b5.3, criterion = "loo") %>% 
+  print(simplify = F)
+```
+
+Like in the text, our `b5.1` has the best LOO estimate, but only by a little bit when compared to `b5.3`. Unlike McElreath reported in the text, we did not get a warning message from `loo_compare()`. Let's investigate more carefully with the `loo()` function.
+
+```{r}
+loo(b5.3)
+```
+
+### Using brms to fit a quadratic approximation
+
+**brms** has a diverse range of estimation options under the hood. By default, it uses the HMC sampling algorithm that is the default MCMC sampling algorithm used by Stan `brm(..., algorithm = "sampling")`. It also allows some posterior approximations that are often faster than full HMC sampling. For example, we can re-run model 5.3 using a laplace approximation of the posterior, which is essentially the same as teh quadratic approximation used in `quap()`.
+
+```{r}
+b5.3laplace <- 
+  brm(data = d, 
+      family = gaussian,
+      d ~ 1 + m + a,
+      prior = c(prior(normal(0, 0.2), class = Intercept),
+                prior(normal(0, 0.5), class = b),
+                prior(exponential(1), class = sigma)),
+      #iter = 2000, warmup = 1000, chains = 4, cores = 4,
+      seed = 5,
+      file = "fits/b05.03laplace",
+      #refresh = 1000,
+      algorithm = "laplace")
+
+
+b5.3laplace <- add_criterion(b5.3laplace, criterion = "loo")
+
+print(b5.3laplace$criteria$loo)
+```
+
+Sure enough, the difference between the HMC version of b5.3 and the laplace/quap b5.3 seems to be related to the fitting algorithm. Let's finish exploring the PSIS-loo diagnostics for the models fit by the HMC algorithm.
+
+### Diagnostics for PSIS-loo, "ok k".
+
+```{r}
+loo(b5.3)
+```
+
+One of the observations was in the `(ok)` range, but none were in the `(bad)` or `(very bad)` ranges. By opening the **loo** package directly, we gain access to the `pareto_k_ids()` function, which will help us identify which observation crossed out of the `(good)` range into the `(ok)`.
+
+```{r, warning = F, message = F}
+library(loo)
+
+loo(b5.3) %>% 
+  pareto_k_ids(threshold = 0.5)
+```
+
+The number `13` refers to the corresponding row in the data used to fit the model. We can access that row directly with the `dplyr::slice()` function.
+
+```{r}
+d %>% 
+  slice(13) %>% 
+  select(Location:Loc)
+```
+
+Here we subset the 13^th^ cell in the `loo::pareto_k_values()` output to see what that value was.
+
+```{r}
+pareto_k_values(loo(b5.3))[13]
+```
+
+Alternatively, we could have extracted that value from our `b5.3` fit object like so.
+
+```{r}
+b5.3$criteria$loo$diagnostics$pareto_k[13]
+```
+
+`r round(b5.3$criteria$loo$diagnostics$pareto_k[13], 2)` is a little high, but not high enough to cause `loo()` to return a warning message. Once a Pareto $k$ value crosses the 0.7 threshold, though, the **loo** package will bark. Before we make our version of Figure 7.10, we'll want to compute the WAIC for `b5.3`. That will give us access to the $p_\text{WAIC}$.
+
+```{r, warning = F, message = F}
+b5.3 <- add_criterion(b5.3, "waic", file = "fits/b05.03")
+b5.3$criteria$waic
+```
+
+We're ready to make our version of Figure 7.10.
+
+```{r, fig.width = 3.25, fig.height = 3}
+tibble(pareto_k = b5.3$criteria$loo$diagnostics$pareto_k,
+       p_waic   = b5.3$criteria$waic$pointwise[, "p_waic"],
+       Loc      = pull(d, Loc)) %>% 
+  
+  ggplot(aes(x = pareto_k, y = p_waic, color = Loc == "ID")) +
+  geom_vline(xintercept = .5, linetype = 2, color = "black", alpha = 1/2) +
+  geom_point(aes(shape = Loc == "ID")) +
+  geom_text(data = . %>% filter(p_waic > 0.5),
+            aes(x = pareto_k - 0.03, label = Loc),
+            hjust = 1) +
+  scale_color_manual(values = carto_pal(7, "BurgYl")[c(5, 7)]) +
+  scale_shape_manual(values = c(1, 19)) +
+  labs(subtitle = "Gaussian model (b5.3)") +
+  theme(legend.position = "none")
+```
+
+For both the Pareto $k$ and the $p_\text{WAIC}$, our values are not as extreme as those McElreath reported in the text. I'm not sure if this is a consequence of us using HMC or due to recent algorithmic changes for the Stan/**loo** teams.
+
+Note: yes, it is :-)
+
+But at least the overall pattern is the same. Idaho is the most extreme/influential case.
+
+In the text (p. 232), McElreath reported the effective number of parameters for `b5.3` was nearly 6. We can look at this with the `waic()` function.
+
+```{r}
+waic(b5.3)
+```
+
+Our $p_\text{WAIC}$ was about `r round(b5.3$criteria$waic$estimates[2, 1], 1)`, which is still a little high due to Idaho but not quite as high as in the text. There is some concern that Idaho is putting us at risk of overfitting due to the large influence it has on the posterior.
+
+> What can be done about this? There is a tradition of dropping outliers. People sometimes drop outliers even before a model is fit, based only on standard deviations from the mean outcome value. You should never do that--a point can only be unexpected and highly influential in light of a model. After you fit a model, the picture changes. If there are only a few outliers, and you are sure to report results both with and without them, dropping outliers might be okay. But if there are several outliers and we really need to model them, what then?
+>
+> A basic problem here is that the Gaussian error model is easily surprised. (p. 232)
+
+This surprise has to do with the thinness of its tails relative to those of the Student's $t$-distribution. We can get a sense of this with Figure 7.11.
+
+```{r, fig.width = 6.5, fig.height = 2.75}
+tibble(x = seq(from = -6, to = 6, by = 0.01)) %>% 
+  mutate(Gaussian    = dnorm(x),
+         `Student-t` = dstudent(x)) %>% 
+  pivot_longer(-x,
+               names_to = "likelihood",
+               values_to = "density") %>% 
+  mutate(`minus log density` = -log(density)) %>% 
+  pivot_longer(contains("density")) %>% 
+  
+  ggplot(aes(x = x, y = value, group = likelihood, color = likelihood)) +
+  geom_line() +
+  scale_color_manual(values = c(carto_pal(7, "BurgYl")[6], "black")) +
+  ylim(0, NA) +
+  labs(x = "value", y = NULL) +
+  theme(strip.background = element_blank()) +
+  facet_wrap(~ name, scales = "free_y")
+```
+
+I'm a little baffled as to why our curves don't quite match up with those in the text. The Gaussian curves were made using the `dnorm()` function with the default settings, which are $\operatorname{Normal}(0, 1)$. The Student-$t$ curves were made with McElreath's `rethinking::dstudent()`function with the default settings, which are $\operatorname{Student-t}(2, 0, 1)$--you get the same results is you use `dt(x, df = 2)`. Discrepancies aside, the main point in the text still stands. The $t$ distribution, especially as $\nu \rightarrow 1$, has thicker tails than the Gaussian. As a consequence, it is more robust to extreme values.
+
+The **brms** package will allow us to fit a Student $t$ model. Just set `family = student`. We are at liberty to estimate $\nu$ along with the other parameters in the model or to set it to a constant. We'll follow McElreath and fix `nu = 2`. Note that **brms** syntax requires we do so within a `bf()` statement.
+
+```{r b5.3t}
+b5.3t <- 
+  brm(data = d, 
+      family = student,
+      bf(d ~ 1 + m + a, nu = 2),
+      prior = c(prior(normal(0, 0.2), class = Intercept),
+                prior(normal(0, 0.5), class = b),
+                prior(exponential(1), class = sigma)),
+      iter = 2000, warmup = 1000, chains = 4, cores = 4,
+      seed = 5,
+      refresh = 1000,
+      file = "fits/b05.03t")
+```
+
+Check the summary.
+
+```{r}
+print(b5.3t)
+```
+
+Here we use the `add_criterion()` function compute both the LOO-CV and the WAIC and add them to the model fit object.
+
+```{r, warning = F, message = F}
+b5.3t <- add_criterion(b5.3t, criterion = c("loo", "waic"))
+```
+
+Now we might remake the plot from Figure 7.10, this time based on the $t$ model.
+
+```{r, fig.width = 3.25, fig.height = 3}
+tibble(pareto_k = b5.3t$criteria$loo$diagnostics$pareto_k,
+       p_waic   = b5.3t$criteria$waic$pointwise[, "p_waic"],
+       Loc      = pull(d, Loc)) %>% 
+  
+  ggplot(aes(x = pareto_k, y = p_waic, color = Loc == "ID")) +
+  geom_point(aes(shape = Loc == "ID")) +
+  geom_text(data = . %>% filter(Loc %in% c("ID", "ME")),
+            aes(x = pareto_k - 0.005, label = Loc),
+            hjust = 1) +
+  scale_color_manual(values = carto_pal(7, "BurgYl")[c(5, 7)]) +
+  scale_shape_manual(values = c(1, 19)) +
+  labs(subtitle = "Student-t model (b5.3t)") +
+  theme(legend.position = "none")
+```
+
+The high points in both the Pareto $k$ and $p_\text{WAIC}$ are much smaller and both ID and ME are now closer to the center of the bivariate distribution. We can formally compare the models with the WAIC and the LOO.
+
+```{r}
+loo_compare(b5.3, b5.3t, criterion = "waic") %>% print(simplify = F)
+loo_compare(b5.3, b5.3t, criterion = "loo") %>% print(simplify = F)
+```
+
+For both criteria, the standard error for the difference was about the same size as the difference itself. This suggests the models were close and hard to distinguish with respect to their fit to the data. This will not always be the case.
+
+Just for kicks and giggles, let's compare the parameter summaries for the two models in a coefficient plot.
+
+```{r, fig.width = 4.5, fig.height = 3.75, warning = F}
+bind_rows(as_draws_df(b5.3),
+          as_draws_df(b5.3t)) %>% 
+  mutate(fit = rep(c("Gaussian (b5.3)", "Student-t (b5.3t)"), each = n() / 2)) %>% 
+  pivot_longer(b_Intercept:sigma) %>% 
+  mutate(name = factor(name,
+                       levels = c("b_Intercept", "b_a", "b_m", "sigma"),
+                       labels = c("alpha", "beta[a]", "beta[m]", "sigma"))) %>% 
+  
+  ggplot(aes(x = value, y = fit, color = fit)) +
+  stat_pointinterval(.width = .95, size = 1) +
+  scale_color_manual(values = c(carto_pal(7, "BurgYl")[6], "black")) +
+  labs(x = "posterior", y = NULL) +
+  theme(axis.text.y = element_text(hjust = 0),
+        axis.ticks.y = element_blank(),
+        legend.position = "none",
+        strip.background = element_rect(fill = alpha(carto_pal(7, "BurgYl")[1], 1/4), color = "transparent"),
+        strip.text = element_text(size = 12)) +
+  facet_wrap(~ name, ncol = 1, labeller = label_parsed)
+```
+
+Overall, the coefficients are very similar between the two models. The most notable difference is in $\sigma$. This is, in part, because $\sigma$ has a slightly different meaning for Student-$t$ models than it does for the Gaussian. For both, we can refer to $\sigma$ as the *scale* parameter, with is a measure of spread or variability around the mean. However, the scale is the same thing as the standard deviation only for the Gaussian. Kruschke walked this out nicely:
+
+> It is important to understand that the scale parameter $\sigma$ in the $t$ distribution is not the standard deviation of the distribution. (Recall that the standard deviation is the square root of the variance, which is the expected value of the squared deviation from the mean, as defined back in Equation 4.8, p. 86.) The standard deviation is actually larger than $\sigma$ because of the heavy tails. In fact, when $\nu$ drops below 2 (but is still $\geq 1$), the standard deviation of the mathematical $t$ distribution goes to infinity. [-@kruschkeDoingBayesianData2015, p. 159]
