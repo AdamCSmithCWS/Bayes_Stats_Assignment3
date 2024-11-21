@@ -1,6 +1,6 @@
 ---
-title: "Bayesian Stats - Assignment 3"
-date: "2022"
+title: "Bayesian Stats - Assignment 2"
+date: "2024"
 output: pdf_document
 bibliography: references.bib
 ---
