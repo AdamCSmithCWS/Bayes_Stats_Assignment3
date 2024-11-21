@@ -69,7 +69,9 @@ obs_means <- birds_sub %>%
   summarise(mean = mean(count))
 
 nn <- 10000#number of samples to draw from the prior
-mean_priors = data.frame(prior = exp(c(rnorm(nn,0,1),
+# data frame with 10000 samples of log-scale priors transformed to reflect
+# their effect on count-scale responses
+mean_priors = data.frame(prior = exp(c(rnorm(nn,0,1), 
                                    rnorm(nn,3,1),
                                    rnorm(nn,0,0.5),
                                    rnorm(nn,0,5))),
@@ -77,13 +79,17 @@ mean_priors = data.frame(prior = exp(c(rnorm(nn,0,1),
                                              rep("Normal(3,1)",nn),
                                              rep("Normal(0,0.5)",nn),
                                              rep("Normal(0,5)",nn)))
-bks = seq(0,100,0.5)
+bks = seq(0,100,0.5) # plotting set-up
+
+# plotting the priors
 prior_obs <- ggplot(data = mean_priors)+
   geom_freqpoly(aes(x = prior,colour = intercept_prior),breaks = bks,center = 0)+
   geom_rug(data = obs_means, aes(x = mean),inherit.aes = FALSE,
            size = 1,alpha = 0.5)+
   coord_cartesian(xlim = c(0,20))+
-  xlab("Mean Counts")
+  scale_colour_viridis_d()+
+  xlab("Mean Counts")+
+  labs(title = "Full plot")
 
 prior_obs_zoom <- ggplot(data = mean_priors)+
   geom_freqpoly(aes(x = prior,colour = intercept_prior),breaks = bks,center = 0)+
@@ -91,7 +97,9 @@ prior_obs_zoom <- ggplot(data = mean_priors)+
            size = 1,alpha = 0.5)+
   coord_cartesian(ylim = c(0,200),
                   xlim = c(0,20))+
-  xlab("Mean Counts")
+  scale_colour_viridis_d()+
+  xlab("Mean Counts")+
+  labs(title = "Zoomed in to show detail")
 
 print(prior_obs + prior_obs_zoom + plot_layout(guides = "collect") 
       + plot_annotation(title = "Alternate intercept priors compared to the observed mean counts by species"))
