@@ -1,0 +1,300 @@
+---
+title: "Writing Models in Stan"
+format: pdf
+editor: visual
+---
+
+## Why write models in Stan
+
+-   Clarity - you know exactly what the model is doing and what each parameter represents (simplifies interpretation and model assessment).
+
+-   Flexibility - you can build a truly *bespoke* model that fits your data structure perfectly and estimates exactly what you want it to (especially useful for complex models and/or assessing comparisons or summaries of parameters, e.g., differences between group means).
+
+## Why not write models in Stan
+
+-   Speed - with some small changes to the formula, `brms` can probably fit the collection of models that you are interested in, even quite complex models.
+-   Safety - with great power, comes great responsibilty
+    -   Extra important to follow a careful workflow, including prior predictive checks, fitting the model to simulated data and confirming it recovers the true parameter values, convergence diagnostics, and posterior predictive checks.
+
+```{R, echo=FALSE,message=FALSE}
+library(cmdstanr)
+library(rethinking)
+library(kableExtra)
+library(tidyverse)
+```
+
+## Structure of a Stan model
+
+A stan program [is divided into "blocks"](https://mc-stan.org/docs/reference-manual/blocks.html). Three blocks are almost always included (not technically necessary, but you're on thin ice if you don't have at least these three blocks).
+
+1.  **"data"** block: where you declare the data types, their dimensions, any restrictions (i.e. upper= or lower= , which act as checks for Stan), and their names. Each named data object represents a named element of the `list` that you will create in R.
+
+2.  **"parameters"** block: This is where you declare the parameters you want to model, their dimensions, restrictions, and name. For example, in a simple linear regression, you'll need three parameters, the intercept, a slope, and the standard deviation of the errors around the regression line.
+
+3.  **"model"** block: This is where you include any sampling statements, including the "likelihood" (the log probability calculations). This is where the distributions are defined, including the priors. You can restrict priors using upper or lower when declaring the parameters (i.e. \<lower=0\> to make sure a parameter is positive - think standard deviation terms )
+
+Four blocks are optional:
+
+-   **"functions"**
+    -   You can define a custom function for use in the model. You probably won't use this at first, but it's very flexible. It can be a function to sample from a custom distribution, a complex calculation that needs to be run multiple times, etc.
+-   **"transformed data"**
+    -   Can be very simple calculations (e.g., defining an n-1 value) or re-ordering or grouping of data. This also may not be necessary at first.
+-   **"transformed parameters"**
+    -   Summaries of parameters and data that are necessary to calculate the likelihood, or that you want to use later in the model (in the model or generated quantities blocks), or that you want to save for accessing after sampling.
+-   **"generated quantities"**
+    -   Derived quantities based on parameters, data, and random numbers (e.g., posterior predictions or some random variate from a normal distribution with a mean and sd based on parameters).
+
+Comments are indicated by "//" and are ignored by Stan, and vital to future-you.
+
+An example Stan model from Chapter 11 in Statistical Rethinking. Here I've taken some of the code from Chapter 11 to set up model `m11.4`: the logistic regression model that estimates the treatment effects and separate intercepts for each chimpanzee (`actor`) on the `pulled_left` binary response.
+
+Data setup, including defining a `list` in R (`dat_list`), that has three components, named to match the data variable names.
+
+```{R, message=FALSE,warning=FALSE}
+## R code 11.1 - taken directly from the book
+library(rethinking)
+data(chimpanzees)
+d <- chimpanzees
+
+## R code 11.2
+d$treatment <- 1 + d$prosoc_left + 2*d$condition
+
+## R code 11.10
+# trimmed data list
+dat_list <- list(
+  pulled_left = d$pulled_left,
+  actor = d$actor,
+  treatment = as.integer(d$treatment) )
+```
+
+Then we define and fit the model with `ulam`.
+
+```{r, echo=FALSE}
+m11.4 <- readRDS("m11_4.rds")
+```
+
+```{r, warning=FALSE, message=FALSE, eval=FALSE}
+
+## R code 11.11
+m11.4 <- ulam(
+  alist(
+    pulled_left ~ dbinom( 1 , p ) ,
+    logit(p) <- a[actor] + b[treatment] ,
+    a[actor] ~ dnorm( 0 , 1.5 ),
+    b[treatment] ~ dnorm( 0 , 0.5 )
+  ) , data=dat_list , chains=4 , log_lik=TRUE ,
+  messages = FALSE)
+  
+
+```
+
+Then we'll use the `rethinking` function `stancode` to extract the model as it was written in Stan. The output of the function is a character vector, that we can write to a text file with a *.stan* extension.
+
+```{R, message=FALSE}
+m11.4_stan_code <- stancode(m11.4)
+cat(m11.4_stan_code,
+    file = "m11.4_Stan_code.stan")
+```
+
+The model includes four blocks, each defined by the curly braces. Here's the data block with some added annotation, where the three data variables are defined(everything between the curly braces that follow the key word data.
+
+```{R, eval=FALSE}
+data{
+    array[504] int pulled_left; // the response variable 0 or 1 (1 = pulled left)
+    array[504] int treatment; // the indicator for each treatment 1 through 4.
+    array[504] int actor; // the indicator for each chimpanzee (1 through 7 )
+}
+
+```
+
+Notice that these are the same names and dimensions of the `dat_list`
+
+```{R}
+str(dat_list)
+```
+
+The overthinking box on page 334 in Section 11.1.1 explains more of the components of the Stan model.
+
+## An elaboration of the Stan model.
+
+If I was writing this Stan model for my own use, I would generalise some of the components so that I could run it on different datasets. In this case, that means defining some of the dimensions (number of observations, number of actors, number of treatments) as data in the model. First, add three components to the data list.
+
+```{R}
+dat_list[["n_observations"]] <- length(dat_list[["pulled_left"]]) 
+dat_list[["n_actors"]] <- max(dat_list[["actor"]]) #number of actors
+dat_list[["n_treatments"]] <- max(dat_list[["treatment"]]) #number of treatments
+
+```
+
+Then we can re-write the Stan code so that it will work with any size of dataset and any collection of actors and treatments. We can use these dimensions in the variable declaration lines in the data, parameters, and models blocks, as well as the loops in the model and generated quantities blocks.
+
+```{R, eval=FALSE}
+data{
+    int<lower=1> n_observations; // number of observations
+    int<lower=1> n_actors;// number of actors
+    int<lower=1> n_treatments;// number of treatments
+    array[n_observations] int pulled_left; // the response variable 0 or 1 (1 = pulled left)
+    array[n_observations] int treatment; // the indicator for each treatment 1 through 4.
+    array[n_observations] int actor; // the indicator for each chimpanzee (1 through 7 )
+}
+
+parameters{
+     vector[n_actors] a;
+     vector[n_treatments] b;
+}
+model{
+     vector[n_observations] p;
+    b ~ normal( 0 , 0.5 );
+    a ~ normal( 0 , 1.5 );
+    for ( i in 1:n_observations ) {
+        p[i] = a[actor[i]] + b[treatment[i]];
+        p[i] = inv_logit(p[i]);
+    }
+    pulled_left ~ binomial( 1 , p );
+}
+generated quantities{
+    vector[n_observations] log_lik;
+     vector[n_observations] p;
+    for ( i in 1:n_observations ) {
+        p[i] = a[actor[i]] + b[treatment[i]];
+        p[i] = inv_logit(p[i]);
+    }
+    for ( i in 1:n_observations ) log_lik[i] = binomial_lpmf( pulled_left[i] | 1 , p[i] );
+}
+
+```
+
+I'll write that model to another *.stan* text file to save it.
+
+```{R}
+write("
+data{
+    int<lower=1> n_observations; // number of observations
+    int<lower=1> n_actors;// number of actors
+    int<lower=1> n_treatments;// number of treatments
+    array[n_observations] int pulled_left; // the response variable 0 or 1 (1 = pulled left)
+    array[n_observations] int treatment; // the indicator for each treatment 1 through 4.
+    array[n_observations] int actor; // the indicator for each chimpanzee (1 through 7 )
+}
+
+parameters{
+     vector[n_actors] a;
+     vector[n_treatments] b;
+}
+model{
+     vector[n_observations] p;
+    b ~ normal( 0 , 0.5 );
+    a ~ normal( 0 , 1.5 );
+    for ( i in 1:n_observations ) {
+        p[i] = a[actor[i]] + b[treatment[i]];
+        p[i] = inv_logit(p[i]);
+    }
+    pulled_left ~ binomial( 1 , p );
+}
+generated quantities{
+    vector[n_observations] log_lik;
+     vector[n_observations] p;
+    for ( i in 1:n_observations ) {
+        p[i] = a[actor[i]] + b[treatment[i]];
+        p[i] = inv_logit(p[i]);
+    }
+    for ( i in 1:n_observations ) log_lik[i] = binomial_lpmf( pulled_left[i] | 1 , p[i] );
+}"
+,
+
+"m11.4_modified_Stan_code.stan")
+```
+
+## Fitting the model using cmdstanr
+
+The R package `cmdstanr` is the go-to package for using Stan from within R. It's used in the backend of the packages `rethinking` and `brms`. The package `rstan` has much of the same functionality, but because it is housed on CRAN, it runs an older version of Stan.
+
+If you haven't already installed cmndstanr, the package has [great set-up documentation](https://mc-stan.org/cmdstanr/articles/cmdstanr.html) and tools built into the package to make sure your set-up works.
+
+There are three basic steps to fitting a model.
+
+### 1 - Compile the model
+
+```{R}
+library(cmdstanr)
+m11.4_stan <- cmdstanr::cmdstan_model("m11.4_modified_Stan_code.stan")
+```
+
+### 2 - Sample
+
+```{R}
+stan_fit <- m11.4_stan$sample(
+data = dat_list,
+seed = 1999, # not necessary
+chains = 4,
+parallel_chains = 4,
+refresh = 1000, # reduces the number of messages
+iter_warmup = 1000,
+iter_sampling = 1000
+)
+```
+
+### 3 - Summarise
+
+The `$summary()` function built into the fitted model object provides parameter summaries as well as convergence diagnostics
+
+```{R}
+fit_sum <- stan_fit$summary()
+kableExtra::kable(fit_sum[1:10,],
+                  digits = 3)
+```
+
+Save the output from `cmdstanr` . Stan saves each iteration in a series of csv files while it's simulating things (by default in a temporary directory), but to ensure that everything is saved (all posterior draws and diagnostics) use the `save_object` function.
+
+```{R}
+stan_fit$save_object("saved_stan_fit.rds") #must add the .rds
+```
+
+### Assessing model fit (WAIC and PSISloo)
+
+The `cmdstanr` includes the psis_loo calculations (this works because the model includes a derived parameter name `log_lik`.
+
+```{R}
+loo_psis <- stan_fit$loo()
+loo_psis
+```
+
+But if you want to calculate waic, you'll have to extract the posterior draws and use the `loo` package functions.
+
+```{r}
+library(loo)
+log_lik_draws <- stan_fit$draws("log_lik")
+loo_waic <- waic(log_lik_draws)
+loo_waic
+```
+
+### Visualising the posterior
+
+To examine trace plots, etc. there are a two options that I tend to use. 
+#### package bayesplot to visualise particular parameters
+```{R}
+library(bayesplot)
+
+trace <- bayesplot::mcmc_trace(stan_fit$draws(),
+                               pars = c("b[1]",
+                                        "b[2]"))
+
+trace
+
+```
+
+To explore multiple parameters and relationships among those parameters, you can use the package `shinystan` to interactively explore the convergence, correlations among parameters, etc.
+
+```{R, eval=FALSE}
+library(shinystan)
+shinystan::launch_shinystan(stan_fit)
+```
+
+
+## Resources
+
+The [main Stan website](https://mc-stan.org/users/documentation/) has lots of useful information.
+
+The [Stan user guide](https://mc-stan.org/docs/stan-users-guide/) has a huge collection of example models. For example, here's the section that covers [regression models](https://mc-stan.org/docs/stan-users-guide/regression.html).
+
+The [Stan Forums](https://discourse.mc-stan.org/), including the questions [tagged with #Ecology](https://discourse.mc-stan.org/tag/ecology).
