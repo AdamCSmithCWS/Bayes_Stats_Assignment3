@@ -16,7 +16,7 @@ editor: visual
 -   Safety - with great power, comes great responsibilty
     -   Extra important to follow a careful workflow, including prior predictive checks, fitting the model to simulated data and confirming it recovers the true parameter values, convergence diagnostics, and posterior predictive checks.
 
-```{R, echo=FALSE,message=FALSE}
+```{R, echo=FALSE,message=FALSE, warning=FALSE}
 library(cmdstanr)
 library(rethinking)
 library(kableExtra)
@@ -46,7 +46,9 @@ Four blocks are optional:
 
 Comments are indicated by "//" and are ignored by Stan, and vital to future-you.
 
-An example Stan model from Chapter 11 in Statistical Rethinking. Here I've taken some of the code from Chapter 11 to set up model `m11.4`: the logistic regression model that estimates the treatment effects and separate intercepts for each chimpanzee (`actor`) on the `pulled_left` binary response.
+## Example cmdstanr model
+
+Here I've taken some of the code from Chapter 11 to set up model `m11.4`: the logistic regression model that estimates the treatment effects and separate intercepts for each chimpanzee (`actor`) on the `pulled_left` binary response.
 
 Data setup, including defining a `list` in R (`dat_list`), that has three components, named to match the data variable names.
 
@@ -87,6 +89,8 @@ m11.4 <- ulam(
   
 
 ```
+
+### Stan code for the model
 
 Then we'll use the `rethinking` function `stancode` to extract the model as it was written in Stan. The output of the function is a character vector, that we can write to a text file with a *.stan* extension.
 
@@ -205,13 +209,25 @@ generated quantities{
 "m11.4_modified_Stan_code.stan")
 ```
 
-## Fitting the model using cmdstanr
+## HMC sampling using cmdstanr
 
 The R package `cmdstanr` is the go-to package for using Stan from within R. It's used in the backend of the packages `rethinking` and `brms`. The package `rstan` has much of the same functionality, but because it is housed on CRAN, it runs an older version of Stan.
 
 If you haven't already installed cmndstanr, the package has [great set-up documentation](https://mc-stan.org/cmdstanr/articles/cmdstanr.html) and tools built into the package to make sure your set-up works.
 
-There are three basic steps to fitting a model.
+### Special note for Windows users
+
+If you're running Stan on a Windows system, you should take advantage of the  `cmdstanr` functions that run `Stan` models in Linux.
+This will likely cut the MCMC run-times by 30-50%.
+
+Installing [Windows Subsystem for Linux (WSL)](https://learn.microsoft.com/en-us/windows/wsl/install) is a small hassle, but only needs to be done once. Follow the directions at the above link.
+
+Once the WSL installation is complete, re-install `cmdstan` using
+`cmdstanr::install_cmdstan(overwrite = TRUE, wsl = TRUE)`. Now,
+everytime you run a model using `cmdstan` (and therefore anytime you run a model using `rethinking` or `brms`), it will use the Linux installation to run Stan. It's seamless and you'll be very thankful you did it, if you ever want to fit a large model and/or model large datasets.
+
+
+There are three basic steps to fitting a model in `cmdstanr`.
 
 ### 1 - Compile the model
 
@@ -226,11 +242,11 @@ m11.4_stan <- cmdstanr::cmdstan_model("m11.4_modified_Stan_code.stan")
 stan_fit <- m11.4_stan$sample(
 data = dat_list,
 seed = 1999, # not necessary
-chains = 4,
-parallel_chains = 4,
+chains = 4, # default
+parallel_chains = 4, # default
 refresh = 1000, # reduces the number of messages
-iter_warmup = 1000,
-iter_sampling = 1000
+iter_warmup = 1000, # default
+iter_sampling = 1000 # default
 )
 ```
 
@@ -243,8 +259,9 @@ fit_sum <- stan_fit$summary()
 kableExtra::kable(fit_sum[1:10,],
                   digits = 3)
 ```
+With these built-in functions that use the `$` method on a cmdstanr object, you'll find the help documentation easier to access if you use the `::` syntax to explicitly define what package's documentation to search. For example `?cmdstanr::summary`, gets you right to the documentation for `summary` from the `cmdstanr` package.
 
-Save the output from `cmdstanr` . Stan saves each iteration in a series of csv files while it's simulating things (by default in a temporary directory), but to ensure that everything is saved (all posterior draws and diagnostics) use the `save_object` function.
+Save the output from `cmdstanr`. Stan saves each iteration in a series of csv files by default stored in a temporary directory, but it doesn't load everything into the R-session. So, to ensure that everything is saved (all posterior draws and diagnostics) use the `$save_object` function with the fitted model.
 
 ```{R}
 stan_fit$save_object("saved_stan_fit.rds") #must add the .rds
@@ -252,7 +269,7 @@ stan_fit$save_object("saved_stan_fit.rds") #must add the .rds
 
 ### Assessing model fit (WAIC and PSISloo)
 
-The `cmdstanr` includes the psis_loo calculations (this works because the model includes a derived parameter name `log_lik`.
+The `cmdstanr` includes a function to calculate the psis_loo for any model that parameter name `log_lik` in the generated quantities block.
 
 ```{R}
 loo_psis <- stan_fit$loo()
@@ -261,7 +278,7 @@ loo_psis
 
 But if you want to calculate waic, you'll have to extract the posterior draws and use the `loo` package functions.
 
-```{r}
+```{r, message=FALSE}
 library(loo)
 log_lik_draws <- stan_fit$draws("log_lik")
 loo_waic <- waic(log_lik_draws)
@@ -271,13 +288,18 @@ loo_waic
 ### Visualising the posterior
 
 To examine trace plots, etc. there are a two options that I tend to use. 
+
 #### package bayesplot to visualise particular parameters
-```{R}
+
+This package has many other useful plotting options, in addition to the trace plots. Note, that again, you need to extract the posterior samples using the `$draws` function on the `cmdstanr` object.
+
+
+```{R, message=FALSE,warning=FALSE}
 library(bayesplot)
 
 trace <- bayesplot::mcmc_trace(stan_fit$draws(),
                                pars = c("b[1]",
-                                        "b[2]"))
+                                        "a[1]"))
 
 trace
 
@@ -290,8 +312,115 @@ library(shinystan)
 shinystan::launch_shinystan(stan_fit)
 ```
 
+## Hierarchical version example
 
-## Resources
+We can modify model 11.4 to match the hierarchical version of the model in Chapter 13.
+
+Here is the modified data object that includes the block_id grouping factor.
+
+
+```{R}
+dat_list <- list(
+pulled_left = d$pulled_left,
+actor = d$actor,
+block_id = d$block, # the new blocking id variable
+treatment = as.integer(d$treatment),
+n_actors = max(d$actor),
+n_treatments = max(as.integer(d$treatment)),
+n_blocks = max(d$block),
+n_observations = nrow(d))
+
+```
+
+### Hierarchical model code
+
+```{R, eval=FALSE}
+write("
+data{
+    int<lower=1> n_observations; // number of observations
+    int<lower=1> n_actors;// number of actors
+    int<lower=1> n_treatments;// number of treatments
+    int<lower=1> n_blocks;// number of blocks
+    
+    array[n_observations] int pulled_left; // the response variable 0 or 1 (1 = pulled left)
+    array[n_observations] int treatment; // the indicator for each treatment 1 through 4.
+    array[n_observations] int actor; // the indicator for each chimpanzee (1 through 7 )
+    array[n_observations] int block_id; // the indicator for block
+}
+
+parameters{
+     vector[n_actors] a_raw; //uncentered parameterisation
+     vector[n_treatments] b;
+     vector[n_blocks] g;
+     real<lower=0> sigma_a; // sd of actor intercepts
+     real<lower=0> sigma_g; // sd of block effects
+     real a_bar;
+}
+
+// including a transformed parameters block to account for
+// the uncentered parameterisation
+transformed parameters {
+  vector[n_actors] a; //uncentered parameterisation
+
+  a = a_bar + sigma_a * a_raw; 
+  //vectorized re-scaling and centering of a_raw
+  // equivalent to a ~ normal(a_bar,sigma_a);
+}
+
+
+model{
+     vector[n_observations] p;
+    b ~ normal( 0 , 0.5 );
+    a_bar ~ normal( 0 , 1.5 );
+    a_raw ~ std_normal(); // same as writing normal(0,1)
+    sigma_a ~ exponential(1);
+    sigma_g ~ exponential(1);
+    g ~ normal(0,sigma_g); // centered parameterisation
+    
+    for ( i in 1:n_observations ) {
+        p[i] = a[actor[i]] + g[block_id[i]] + b[treatment[i]];
+        p[i] = inv_logit(p[i]);
+    }
+    pulled_left ~ binomial( 1 , p );
+}
+generated quantities{
+    vector[n_observations] log_lik;
+     vector[n_observations] p;
+    for ( i in 1:n_observations ) {
+        p[i] = a[actor[i]] + b[treatment[i]];
+        p[i] = inv_logit(p[i]);
+    }
+    for ( i in 1:n_observations ) log_lik[i] = binomial_lpmf( pulled_left[i] | 1 , p[i] );
+}"
+,
+
+"m11.4_hierarchical_modified_Stan_code.stan")
+```
+
+Compiling the hierarchical model
+
+```{R}
+m11.4_hierarchical_stan <- cmdstanr::cmdstan_model("m11.4_hierarchical_modified_Stan_code.stan")
+```
+Sampling from the hierarchical model
+
+
+```{R}
+stan_fit_hierarchical <- m11.4_hierarchical_stan$sample(
+data = dat_list,
+seed = 1999, # not necessary
+chains = 4, # default
+parallel_chains = 4, # default
+refresh = 1000, # reduces the number of messages
+iter_warmup = 1000, # default
+iter_sampling = 1000 # default
+)
+```
+There is a warning about a single divergent transition. it's only one out of 4000, so maybe not a big deal. We could probably avoid this completely if we used a non-centered parameterisation for the group effects as well as the actor effects.
+
+
+
+## Additional resources
 
 The [main Stan website](https://mc-stan.org/users/documentation/) has lots of useful information.
 
