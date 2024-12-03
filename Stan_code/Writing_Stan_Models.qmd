@@ -217,15 +217,11 @@ If you haven't already installed cmndstanr, the package has [great set-up docume
 
 ### Special note for Windows users
 
-If you're running Stan on a Windows system, you should take advantage of the  `cmdstanr` functions that run `Stan` models in Linux.
-This will likely cut the MCMC run-times by 30-50%.
+If you're running Stan on a Windows system, you should take advantage of the `cmdstanr` functions that run `Stan` models in Linux. This will likely cut the MCMC run-times by 30-50%.
 
 Installing [Windows Subsystem for Linux (WSL)](https://learn.microsoft.com/en-us/windows/wsl/install) is a small hassle, but only needs to be done once. Follow the directions at the above link.
 
-Once the WSL installation is complete, re-install `cmdstan` using
-`cmdstanr::install_cmdstan(overwrite = TRUE, wsl = TRUE)`. Now,
-everytime you run a model using `cmdstan` (and therefore anytime you run a model using `rethinking` or `brms`), it will use the Linux installation to run Stan. It's seamless and you'll be very thankful you did it, if you ever want to fit a large model and/or model large datasets.
-
+Once the WSL installation is complete, re-install `cmdstan` using `cmdstanr::install_cmdstan(overwrite = TRUE, wsl = TRUE)`. Now, everytime you run a model using `cmdstan` (and therefore anytime you run a model using `rethinking` or `brms`), it will use the Linux installation to run Stan. It's seamless and you'll be very thankful you did it, if you ever want to fit a large model and/or model large datasets.
 
 There are three basic steps to fitting a model in `cmdstanr`.
 
@@ -259,6 +255,7 @@ fit_sum <- stan_fit$summary()
 kableExtra::kable(fit_sum[1:10,],
                   digits = 3)
 ```
+
 With these built-in functions that use the `$` method on a cmdstanr object, you'll find the help documentation easier to access if you use the `::` syntax to explicitly define what package's documentation to search. For example `?cmdstanr::summary`, gets you right to the documentation for `summary` from the `cmdstanr` package.
 
 Save the output from `cmdstanr`. Stan saves each iteration in a series of csv files by default stored in a temporary directory, but it doesn't load everything into the R-session. So, to ensure that everything is saved (all posterior draws and diagnostics) use the `$save_object` function with the fitted model.
@@ -287,15 +284,14 @@ loo_waic
 
 ### Visualising the posterior
 
-To examine trace plots, etc. there are a two options that I tend to use. 
+To examine trace plots, etc. there are a two options that I tend to use.
 
 #### package bayesplot to visualise particular parameters
 
 This package has many other useful plotting options, in addition to the trace plots. Note, that again, you need to extract the posterior samples using the `$draws` function on the `cmdstanr` object.
 
-
 ```{R, message=FALSE,warning=FALSE}
-library(bayesplot)
+#library(bayesplot)
 
 trace <- bayesplot::mcmc_trace(stan_fit$draws(),
                                pars = c("b[1]",
@@ -317,7 +313,6 @@ shinystan::launch_shinystan(stan_fit)
 We can modify model 11.4 to match the hierarchical version of the model in Chapter 13.
 
 Here is the modified data object that includes the block_id grouping factor.
-
 
 ```{R}
 dat_list <- list(
@@ -402,8 +397,8 @@ Compiling the hierarchical model
 ```{R}
 m11.4_hierarchical_stan <- cmdstanr::cmdstan_model("m11.4_hierarchical_modified_Stan_code.stan")
 ```
-Sampling from the hierarchical model
 
+Sampling from the hierarchical model
 
 ```{R}
 stan_fit_hierarchical <- m11.4_hierarchical_stan$sample(
@@ -416,9 +411,8 @@ iter_warmup = 1000, # default
 iter_sampling = 1000 # default
 )
 ```
-There is a warning about a single divergent transition. it's only one out of 4000, so maybe not a big deal. We could probably avoid this completely if we used a non-centered parameterisation for the group effects as well as the actor effects.
 
-
+There is a warning about a single divergent transition. it's only one out of 4000, so maybe not a big deal. We could probably avoid this completely if we used a non-centered parameterisation for the group effects as well as the actor effects. If we wanted to better understand why this divergent transition appeared, exploring the model output in `shinystan` would almost certainly help `shinystan::launch_shinystan(stan_fit_hierarchical)`
 
 ## Additional resources
 
